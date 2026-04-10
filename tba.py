@@ -88,3 +88,18 @@ def get_match_sync(match_key: str) -> dict | None:
         return data if status == 200 else None
     except Exception as e:
         return None
+
+
+def get_match_sync(match_key: str) -> dict | None:
+    """Synchronous TBA match fetch for use in Slack slash commands."""
+    import httpx as _httpx
+    import os as _os
+    url = f"https://www.thebluealliance.com/api/v3/match/{match_key}"
+    headers = {"X-TBA-Auth-Key": _os.environ["TBA_API_KEY"]}
+    try:
+        r = _httpx.get(url, headers=headers, timeout=8.0)
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except Exception:
+        return None
