@@ -38,7 +38,7 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
     if not display.upper().startswith("QM"):
         logger.info("Skipping non-qual match: %s", match_label)
         return
-    scouts = sheets.get_all_scouts_for_match(match_label)
+    scouts = sheets.get_all_scouts_for_match(display)
 
     if not scouts:
         logger.warning("No scouts found for %s — queuing alert skipped", match_label)
@@ -63,7 +63,7 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
 def send_ondeck_alerts(match_label: str, tba_key: str) -> None:
     """DM match scouts only that the match is on deck."""
     display = match_label_to_display(match_label)
-    scouts = sheets.get_match_scouts_only(match_label)
+    scouts = sheets.get_match_scouts_only(display)
 
     if not scouts:
         logger.info("No match scouts for %s — on-deck alert skipped", match_label)
@@ -82,7 +82,7 @@ def send_ondeck_alerts(match_label: str, tba_key: str) -> None:
 def send_results_alerts(match_label: str, tba_key: str) -> None:
     """DM all scouts that results are posted and to submit Lovat."""
     display = match_label_to_display(match_label)
-    scouts = sheets.get_all_scouts_for_match(match_label)
+    scouts = sheets.get_all_scouts_for_match(display)
 
     if not scouts:
         logger.warning("No scouts found for %s — results alert skipped", match_label)
@@ -110,8 +110,9 @@ def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
 
     time.sleep(confirm_wait)
 
-    scouts = sheets.get_all_scouts_for_match(match_label)
-    unconfirmed = [name for name, role in scouts if not state.is_confirmed(match_label, name)]
+    display = match_label_to_display(match_label)
+    scouts = sheets.get_all_scouts_for_match(display)
+    unconfirmed = [name for name, role in scouts if not state.is_confirmed(display, name)]
 
     if not unconfirmed:
         logger.info("All scouts confirmed for %s", display)
