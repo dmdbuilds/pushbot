@@ -116,6 +116,10 @@ def cmd_my_shift(ack, body, respond):
 @app.command("/match-stats")
 def cmd_match_stats(ack, body, respond):
     ack()
+    import threading
+    threading.Thread(target=_match_stats_worker, args=(body, respond)).start()
+
+def _match_stats_worker(body, respond):
     label = body.get("text", "").strip().upper()
     if not label:
         respond(":x: Usage: `/match-stats QM12`", response_type="ephemeral")
@@ -212,6 +216,10 @@ def cmd_match_stats(ack, body, respond):
 @app.command("/post-match")
 def cmd_post_match(ack, body, respond):
     ack()
+    import threading
+    threading.Thread(target=_post_match_worker, args=(body, respond)).start()
+
+def _post_match_worker(body, respond):
     user_id = body.get("user_id", "")
     lead_id = os.environ.get("SCOUTING_LEAD_SLACK_ID", "")
     if user_id != lead_id:
