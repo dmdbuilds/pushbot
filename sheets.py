@@ -27,51 +27,84 @@ def _get_client() -> gspread.Client:
 
 
 def parse_names(cell_value: str) -> list[str]:
-    """Extract scout names from a cell value, ignoring team numbers, keywords, and note text."""
+    """Parse a simple single-name cell (Rotating Pit, Pit Ambassador).
+    Returns empty list if the cell looks like a note/instruction block."""
     if not cell_value:
+        return []
+    # Long cells or cells with arrows are notes/match-scout cells, not names
+    if len(cell_value.strip()) > 60 or "\u2192" in cell_value or "|" in cell_value:
         return []
     names = []
     for line in str(cell_value).strip().split("\n"):
         line = line.strip()
         if not line:
             continue
-        # Skip pure team number lines
         if re.match(r"^[\d,\s]+$", line):
             continue
-        # Skip known keyword placeholders
         if line.upper() in ("BREAK", "FLUID PIT SCOUTING", "X", "TBD", "N/A"):
             continue
-        # Skip lines with note/assignment formatting characters
-        if any(c in line for c in ("\u2192", "|", "[", "]", "(for")):
+        if len(line) > 30 or len(line.split()) > 3:
             continue
-        if ":" in line:
-            continue
-        # Skip lines that are too long or have too many words to be a name
-        if len(line) > 30:
-            continue
-        if len(line.split()) > 3:
-            continue
-        # Skip lines starting with lowercase (instructions, not names)
         if line[0].islower():
             continue
         names.append(line)
     return names
 
 
-# Column indices (0-based) and their roles
-ROLE_COLUMNS = {
-    2: "Rotating Pit",    # C
-    4: "Permanent Pit",   # E
-    6: "Pit Scout",       # G
-    # 8: "Match Scout",   # I — handled specially (multiple scouts)
-    10: "Pit Ambassador", # K
-}
-MATCH_SCOUT_COL = 8  # I — 6 scouts in order: blue1, blue2, blue3, red1, red2, red3
-MATCH_SCOUT_ROLES = ["Blue Scout 1", "Blue Scout 2", "Blue Scout 3",
-                     "Red Scout 1", "Red Scout 2", "Red Scout 3"]
+def parse_pit_scouts(cell_value: str) -> list[str]:
+    """Parse Pit Scout column: names separated by ' - ' e.g. 'Neel - Noah - Muhammad'."""
+    if not cell_value or "\u2192" in cell_value:
+        return []
+    names = []
+    raw = cell_value.replace("\n", " - ")
+    for part in raw.split(" - "):
+        part = part.strip()
+        if not part:
+            continue
+        if re.match(r"^[\d,\s]+$", part):
+            continue
+        if part.upper() in ("BREAK", "X", "TBD"):
+            continue
+        if part[0].islower():
+            continue
+        if len(part) > 30:
+            continue
+        names.append(part)
+    return names
 
-# Match number column
-MATCH_COL = 1   # B — "QM1", "QM2", etc.
+
+def parse_match_scouts(cell_value: str) -> list[str]:
+    """Parse Match Scout column: 'Name → TXXXX [role] (for QMN) | Name → ...'
+    Returns list of scout names."""
+    if not cell_value or "\u2192" not in cell_value:
+        return []
+    names = []
+    for entry in cell_value.split(" | "):
+        entry = entry.strip()
+        if "\u2192" not in entry:
+            continue
+        name = entry.split("\u2192")[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+# Column indices verified against actual DCMP sheet structure
+# Col 0: Estimated Time
+# Col 1: Match Number
+# Col 2: Rotating Pit     — single name, carry-forward
+# Col 4: Permanent Pit    — instruction note blob, IGNORED
+# Col 6: Pit Scout        — dash-separated names, carry-forward
+# Col 8: Match Scout      — "Name → TXXXX [role] (for QMN) | ..." format
+# Col 9: AllianceColor#   — metadata, not a scout name
+# Col 10: Pit Ambassador  — single name, carry-forward
+MATCH_COL = 1
+ROT_PIT_COL = 2
+PIT_SCOUT_COL = 6
+MATCH_SCOUT_COL = 8
+PIT_AMB_COL = 10
+MATCH_SCOUT_ROLES = ["Match Scout"]  # kept for compatibility
+ROLE_COLUMNS = {}  # not used in new loader
 
 
 def _load_schedule() -> dict[str, dict]:
@@ -89,46 +122,56 @@ def _load_schedule() -> dict[str, dict]:
 
     schedule: dict[str, dict] = {}
 
-    # Carry-forward state for block-fill columns
-    carry: dict[int, list[str]] = {col: [] for col in ROLE_COLUMNS}
-    match_scout_carry: list[list[str]] = [[] for _ in range(6)]
+    # Carry-forward state
+    rot_pit_carry: list[str] = []
+    pit_scout_carry: list[str] = []
+    pit_amb_carry: list[str] = []
 
     for row in rows:
-        # Ensure row is long enough
-        while len(row) <= max(max(ROLE_COLUMNS.keys()), MATCH_SCOUT_COL + 5):
+        while len(row) <= max(MATCH_SCOUT_COL, PIT_AMB_COL) + 1:
             row.append("")
 
         match_label_raw = row[MATCH_COL].strip() if len(row) > MATCH_COL else ""
         if not match_label_raw:
             continue
-
-        # Normalize match label: "QM1", "QM2", "SF1", etc.
         match_label = match_label_raw.upper()
+        if not re.match(r"^(QM|SF|F|PM)\d+", match_label):
+            continue
 
         if match_label not in schedule:
             schedule[match_label] = {}
 
-        # Parse single-name role columns with carry-forward
-        for col, role in ROLE_COLUMNS.items():
-            if col < len(row) and row[col].strip():
-                names = parse_names(row[col])
-                carry[col] = names
-            schedule[match_label].setdefault(role, [])
-            for name in carry[col]:
-                if name not in schedule[match_label][role]:
-                    schedule[match_label][role].append(name)
+        # Col 2: Rotating Pit
+        if row[ROT_PIT_COL].strip():
+            rot_pit_carry = parse_names(row[ROT_PIT_COL])
+        schedule[match_label].setdefault("Rotating Pit", [])
+        for name in rot_pit_carry:
+            if name not in schedule[match_label]["Rotating Pit"]:
+                schedule[match_label]["Rotating Pit"].append(name)
 
-        # Parse match scouts (up to 6 columns starting at MATCH_SCOUT_COL)
-        for i in range(6):
-            col_idx = MATCH_SCOUT_COL + i
-            if col_idx < len(row) and row[col_idx].strip():
-                names = parse_names(row[col_idx])
-                match_scout_carry[i] = names
-            role = MATCH_SCOUT_ROLES[i]
-            schedule[match_label].setdefault(role, [])
-            for name in match_scout_carry[i]:
-                if name not in schedule[match_label][role]:
-                    schedule[match_label][role].append(name)
+        # Col 6: Pit Scout (dash-separated names)
+        if row[PIT_SCOUT_COL].strip():
+            pit_scout_carry = parse_pit_scouts(row[PIT_SCOUT_COL])
+        schedule[match_label].setdefault("Pit Scout", [])
+        for name in pit_scout_carry:
+            if name not in schedule[match_label]["Pit Scout"]:
+                schedule[match_label]["Pit Scout"].append(name)
+
+        # Col 8: Match Scout (Name → team format)
+        if row[MATCH_SCOUT_COL].strip():
+            match_names = parse_match_scouts(row[MATCH_SCOUT_COL])
+            schedule[match_label].setdefault("Match Scout", [])
+            for name in match_names:
+                if name not in schedule[match_label]["Match Scout"]:
+                    schedule[match_label]["Match Scout"].append(name)
+
+        # Col 10: Pit Ambassador
+        if row[PIT_AMB_COL].strip():
+            pit_amb_carry = parse_names(row[PIT_AMB_COL])
+        schedule[match_label].setdefault("Pit Ambassador", [])
+        for name in pit_amb_carry:
+            if name not in schedule[match_label]["Pit Ambassador"]:
+                schedule[match_label]["Pit Ambassador"].append(name)
 
     logger.info("Loaded schedule: %d match entries", len(schedule))
     return schedule
@@ -174,12 +217,11 @@ def get_all_scouts_for_match(match_label: str) -> list[tuple[str, str]]:
 
 
 def get_match_scouts_only(match_label: str) -> list[tuple[str, str]]:
-    """Return only the 6 match scouts (Blue/Red Scout 1/2/3) for a match."""
+    """Return only the match scouts for a match."""
     roles = get_scouts_for_match(match_label)
     result = []
-    for role in MATCH_SCOUT_ROLES:
-        for name in roles.get(role, []):
-            result.append((name, role))
+    for name in roles.get("Match Scout", []):
+        result.append((name, "Match Scout"))
     return result
 
 
