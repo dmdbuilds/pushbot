@@ -65,13 +65,9 @@ def send_ondeck_alerts(match_label: str, tba_key: str) -> None:
 
 
 def send_results_alerts(match_label: str, tba_key: str) -> None:
-    """DM all scouts that results are posted and to submit Lovat."""
+    """DM match scouts that results are posted, and auto-post summary to results channel."""
     display = match_label_to_display(match_label)
     scouts = sheets.get_match_scouts_only(display)
-
-    if not scouts:
-        logger.warning("No match scouts found for %s — results alert skipped", match_label)
-        return
 
     for name, role in scouts:
         text = (
@@ -81,7 +77,88 @@ def send_results_alerts(match_label: str, tba_key: str) -> None:
         )
         slack_utils.dm_scout(name, text)
 
-    logger.info("Results alerts sent for %s to %d match scouts", display, len(scouts))
+    if scouts:
+        logger.info("Results alerts sent for %s to %d match scouts", display, len(scouts))
+
+    # Auto-post match summary to results channel
+    _post_match_summary(display, tba_key)
+
+
+def _post_match_summary(display: str, tba_key: str) -> None:
+    """Fetch TBA match data and post a summary to the results channel."""
+    import httpx
+    import os
+
+    results_channel = os.environ.get("RESULTS_CHANNEL_ID", "")
+    if not results_channel:
+        logger.warning("RESULTS_CHANNEL_ID not set — skipping auto post-match")
+        return
+
+    try:
+        headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+        r = httpx.get(
+            f"https://www.thebluealliance.com/api/v3/match/{tba_key}",
+            headers=headers,
+            timeout=8.0,
+        )
+        if r.status_code != 200:
+            logger.warning("TBA returned %d for %s — skipping post-match", r.status_code, tba_key)
+            return
+
+        match_info = r.json()
+        if not match_info.get("alliances"):
+            return
+
+        red_teams = match_info["alliances"]["red"]["team_keys"]
+        blue_teams = match_info["alliances"]["blue"]["team_keys"]
+        red_score = match_info["alliances"]["red"].get("score", -1)
+        blue_score = match_info["alliances"]["blue"].get("score", -1)
+
+        red_str = " | ".join(t.replace("frc", "") for t in red_teams)
+        blue_str = " | ".join(t.replace("frc", "") for t in blue_teams)
+
+        we_red = "frc7419" in red_teams
+        we_blue = "frc7419" in blue_teams
+
+        if not we_red and not we_blue:
+            logger.info("7419 not in %s — skipping post-match", display)
+            return
+
+        our_score = red_score if we_red else blue_score
+        opp_score = blue_score if we_red else red_score
+
+        if our_score > opp_score:
+            result = "WIN :white_check_mark:"
+        elif our_score == opp_score:
+            result = "TIE :arrow_right:"
+        else:
+            result = "LOSS :x:"
+
+        bd = match_info.get("score_breakdown") or {}
+        ours = bd.get("red" if we_red else "blue", {})
+
+        lines = [
+            f":robot_face: *{display} Result — Team 7419*",
+            f":red_circle: Red:  {red_str} — {red_score} pts",
+            f":large_blue_circle: Blue: {blue_str} — {blue_score} pts",
+            f"",
+            f"*7419: {result}* ({our_score} – {opp_score})",
+        ]
+        if ours:
+            lines.append(
+                f"Auto: {ours.get('autoPoints', 0)} | "
+                f"Teleop: {ours.get('teleopPoints', 0)} | "
+                f"Endgame: {ours.get('endgamePoints', 0)}"
+            )
+
+        slack_utils.get_client().chat_postMessage(
+            channel=results_channel,
+            text="\n".join(lines),
+        )
+        logger.info("Auto post-match summary posted for %s", display)
+
+    except Exception as e:
+        logger.error("Failed to post match summary for %s: %s", display, e)
 
 
 def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
