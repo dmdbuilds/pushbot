@@ -41,11 +41,7 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
     scouts = sheets.get_match_scouts_only(display)
 
     if not scouts:
-        logger.warning("No match scouts found for %s — queuing alert skipped", match_label)
-        slack_utils.dm_lead(
-            f":warning: *Push Bot* — No match scouts found in schedule for *{display}* (queuing). "
-            f"Check the Google Sheet."
-        )
+        logger.info("No match scouts for %s — skipping", display)
         return
 
     for name, role in scouts:
