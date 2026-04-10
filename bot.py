@@ -179,185 +179,57 @@ def cmd_match_stats(ack, body, respond):
 def cmd_post_match(ack, body, respond):
     ack()
     import threading
-    threading.Thread(target=_post_match_worker, args=(body, respond)).start()
-
-def _post_match_worker(body, respond):
-    user_id = body.get("user_id", "")
-    lead_id = os.environ.get("SCOUTING_LEAD_SLACK_ID", "")
-    if user_id != lead_id:
-        reply(":x: Only the scouting lead can use this command.")
-        return
-
-    label = body.get("text", "").strip().upper()
-    if not label:
-        reply(":x: Usage: `/post-match QM12`")
-        return
-
-    import tba
-    TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
-    tba_key = f"{TBA_EVENT}_{label.lower()}"
-    match_info = tba.get_match(tba_key)
-
-    if not match_info or not match_info.get("alliances"):
-        reply(f":x: No results yet for *{label}*.")
-        return
-
-    red = match_info["alliances"]["red"]["team_keys"]
-    blue = match_info["alliances"]["blue"]["team_keys"]
-    red_score = match_info["alliances"]["red"].get("score", -1)
-    blue_score = match_info["alliances"]["blue"].get("score", -1)
-
-    if red_score < 0:
-        reply(f":x: *{label}* hasn't been played yet.")
-        return
-
-    red_str = " | ".join(t.replace("frc", "") for t in red)
-    blue_str = " | ".join(t.replace("frc", "") for t in blue)
-
-    we_red = "frc7419" in red
-    our_score = red_score if we_red else blue_score
-    opp_score = blue_score if we_red else red_score
-    result = "WIN ✅" if our_score > opp_score else ("TIE ➡️" if our_score == opp_score else "LOSS ❌")
-
-    bd = match_info.get("score_breakdown") or {}
-    r = bd.get("red", {})
-    b = bd.get("blue", {})
-    ours = r if we_red else b
-    theirs = b if we_red else r
-
-    lines = [
-        f":robot_face: *{label} Result — Team 7419*",
-        f"🔴 Red:  {red_str} — {red_score} pts",
-        f"🔵 Blue: {blue_str} — {blue_score} pts",
-        f"",
-        f"*7419: {result}* ({our_score} – {opp_score})",
-    ]
-    if ours and theirs:
-        lines += [
-            f"Auto: {ours.get('autoPoints',0)} | Teleop: {ours.get('teleopPoints',0)} | Endgame: {ours.get('endgamePoints',0)}",
-        ]
-
-    app.client.chat_postMessage(
-        channel="district-championships",
-        text="\n".join(lines)
-    )
-    reply(":white_check_mark: Posted to #district-championships.")
-
-# ──────────────────────────────────────────────
-# /push MATCH
-# ──────────────────────────────────────────────
-
-@app.command("/push")
-def cmd_push(ack, body, respond):
-    ack()
-    match_label = body.get("text", "").strip()
-
-    if not match_label:
-        reply(":x: Usage: `/push QM12`")
-        return
-
-    event_key = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
-    result = scheduler.trigger_match_queuing(match_label, event_key)
-    reply(result)
-
-
-# ──────────────────────────────────────────────
-# /confirm MATCH NAME
-# ──────────────────────────────────────────────
-
-@app.command("/confirm")
-def cmd_confirm(ack, body, respond):
-    ack()
-    text = body.get("text", "").strip()
-    parts = text.split(None, 1)
-
-    if len(parts) < 2:
-        reply(":x: Usage: `/confirm QM12 Kaveesh`")
-        return
-
-    match_label, scout_name = parts[0].upper(), parts[1].strip()
-    state.confirm_scout(match_label, scout_name)
-    respond(
-        f":white_check_mark: Marked *{scout_name}* as confirmed for *{match_label}*.",
-        response_type="ephemeral"
-    )
-    logger.info("Manual confirm: %s for %s", scout_name, match_label)
-
-
-# ──────────────────────────────────────────────
-# /refresh-schedule
-# ──────────────────────────────────────────────
-
-@app.command("/refresh-schedule")
-def cmd_refresh_schedule(ack, body, respond):
-    ack()
-    try:
-        schedule = sheets.get_schedule(force_refresh=True)
-        respond(
-            f":arrows_counterclockwise: Schedule refreshed. *{len(schedule)}* match entries loaded.",
-            response_type="ephemeral"
-        )
-    except Exception as e:
-        logger.error("Schedule refresh failed: %s", e)
-        reply(f":x: Failed to refresh schedule: {e}")
-
-
-# ──────────────────────────────────────────────
-# /nexus-status
-# ──────────────────────────────────────────────
-
-@app.command("/nexus-status")
-def cmd_nexus_status(ack, body, respond):
-    ack()
-    import httpx
-
-    event_key = os.environ.get("NEXUS_EVENT_KEY", "2026cancmp")
-    nexus_api_key = os.environ.get("NEXUS_API_KEY", "")
-    url = f"https://frc.nexus/api/v1/event/{event_key}"
-
-    try:
-        resp = httpx.get(url, headers={"Nexus-Api-Key": nexus_api_key}, timeout=10.0)
-        if resp.status_code != 200:
-            reply(f":x: Nexus API returned {resp.status_code}")
-            return
-
-        data = resp.json()
-        now_queuing = data.get("nowQueuing", "None")
-        on_deck = data.get("onDeck", "None")
-        matches = data.get("matches", [])
-        active = [m for m in matches if m.get("status") in ("Now queuing", "On deck", "On field")]
-
-        lines = [
-            f":satellite: *Nexus Status — {event_key}*",
-            f"  Now Queuing: *{now_queuing}*",
-            f"  On Deck: *{on_deck}*",
-        ]
-        if active:
-            lines.append("  Active matches:")
-            for m in active:
-                lines.append(f"    • {m['label']}: {m['status']}")
-
-        respond("\n".join(lines), response_type="ephemeral")
-
-    except Exception as e:
-        logger.error("Nexus status pull failed: %s", e)
-        reply(f":x: Could not reach Nexus API: {e}")
-
-
-# ──────────────────────────────────────────────
-# Start Socket Mode
-# ──────────────────────────────────────────────
-
-def start_socket_mode():
-    """Start the Slack Socket Mode handler in a daemon thread."""
-    import threading
-
-    handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
-
-    def _run():
-        logger.info("Starting Slack Socket Mode handler")
-        handler.start()
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    logger.info("Slack Socket Mode handler started in background thread")
+    def work():
+        try:
+            user_id = body.get("user_id", "")
+            channel_id = body.get("channel_id", "")
+            lead_id = os.environ.get("SCOUTING_LEAD_SLACK_ID", "")
+            if user_id != lead_id:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Only the scouting lead can use this command.")
+                return
+            label = body.get("text", "").strip().upper()
+            if not label:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Usage: `/post-match QM12`")
+                return
+            import httpx
+            TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
+            tba_key = f"{TBA_EVENT}_{label.lower()}"
+            headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+            r = httpx.get(f"https://www.thebluealliance.com/api/v3/match/{tba_key}", headers=headers, timeout=8.0)
+            match_info = r.json() if r.status_code == 200 else None
+            if not match_info or not match_info.get("alliances"):
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=f":x: No results yet for *{label}*.")
+                return
+            red_teams = match_info["alliances"]["red"]["team_keys"]
+            blue_teams = match_info["alliances"]["blue"]["team_keys"]
+            red_score = match_info["alliances"]["red"].get("score", -1)
+            blue_score = match_info["alliances"]["blue"].get("score", -1)
+            if red_score < 0:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=f":x: *{label}* hasn't been played yet.")
+                return
+            red_str = " | ".join(t.replace("frc", "") for t in red_teams)
+            blue_str = " | ".join(t.replace("frc", "") for t in blue_teams)
+            we_red = "frc7419" in red_teams
+            our_score = red_score if we_red else blue_score
+            opp_score = blue_score if we_red else red_score
+            result = "WIN :white_check_mark:" if our_score > opp_score else ("TIE :arrow_right:" if our_score == opp_score else "LOSS :x:")
+            bd = match_info.get("score_breakdown") or {}
+            ours = bd.get("red" if we_red else "blue", {})
+            lines = [
+                f":robot_face: *{label} Result — Team 7419*",
+                f":red_circle: Red:  {red_str} — {red_score} pts",
+                f":large_blue_circle: Blue: {blue_str} — {blue_score} pts",
+                f"",
+                f"*7419: {result}* ({our_score} – {opp_score})",
+            ]
+            if ours:
+                lines.append(f"Auto: {ours.get('autoPoints',0)} | Teleop: {ours.get('teleopPoints',0)} | Endgame: {ours.get('endgamePoints',0)}")
+            app.client.chat_postMessage(channel="district-championships", text="\n".join(lines))
+            app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":white_check_mark: Posted to #district-championships.")
+        except Exception as e:
+            logger.error("post-match error: %s", e)
+            try:
+                app.client.chat_postEphemeral(channel=body.get("channel_id",""), user=body.get("user_id",""), text=f":x: Error: {e}")
+            except:
+                pass
+    threading.Thread(target=work).start()
