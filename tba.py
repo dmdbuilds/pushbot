@@ -71,3 +71,20 @@ def match_is_done(match_data: dict) -> bool:
 def match_has_started(match_data: dict) -> bool:
     """Return True if the match has been played (actual_time populated)."""
     return match_data.get("actual_time") is not None
+
+
+def get_match_sync(match_key: str) -> dict | None:
+    """Synchronous wrapper around get_match for use in Slack commands."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, get_match(match_key))
+                data, _, status = future.result(timeout=10)
+        else:
+            data, _, status = loop.run_until_complete(get_match(match_key))
+        return data if status == 200 else None
+    except Exception as e:
+        return None
