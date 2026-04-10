@@ -40,7 +40,7 @@ def cmd_scouting_status(ack, body, respond):
         match_label = text
         roles = sheets.get_scouts_for_match(match_label)
         if not roles:
-            respond(f":x: No scouts found for *{match_label}* in the schedule.", response_type="ephemeral")
+            reply(f":x: No scouts found for *{match_label}* in the schedule.")
             return
 
         lines = [f":mag: *Scouting status for {match_label}*"]
@@ -61,7 +61,7 @@ def cmd_scouting_status(ack, body, respond):
             polling = set(state.polling_matches.keys())
 
         if not queuing and not polling:
-            respond(":zzz: No active matches right now.", response_type="ephemeral")
+            reply(":zzz: No active matches right now.")
             return
 
         lines = [":clipboard: *Active Match Overview*"]
@@ -93,12 +93,12 @@ def cmd_my_shift(ack, body, respond):
 
     if not name:
         # Default to the caller if possible — but we only have Slack user ID
-        respond(":x: Usage: `/my-shift Name` — e.g. `/my-shift Kaveesh`", response_type="ephemeral")
+        reply(":x: Usage: `/my-shift Name` — e.g. `/my-shift Kaveesh`")
         return
 
     shifts = sheets.get_shifts_for_scout(name)
     if not shifts:
-        respond(f":x: No shifts found for *{name}* in the schedule.", response_type="ephemeral")
+        reply(f":x: No shifts found for *{name}* in the schedule.")
         return
 
     lines = [f":calendar: *Shifts for {name}*"]
@@ -121,8 +121,12 @@ def cmd_match_stats(ack, body, respond):
 
 def _match_stats_worker(body, respond):
     label = body.get("text", "").strip().upper()
+    user_id = body.get("user_id", "")
+    channel_id = body.get("channel_id", "")
+    def reply(text):
+        app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=text)
     if not label:
-        respond(":x: Usage: `/match-stats QM12`", response_type="ephemeral")
+        reply(":x: Usage: `/match-stats QM12`")
         return
 
     import tba, nexus as nxs
@@ -207,7 +211,7 @@ def _match_stats_worker(body, respond):
 
         respond("\n".join(lines), response_type="ephemeral")
     else:
-        respond(f":x: Could not find match data for *{label}*.", response_type="ephemeral")
+        reply(f":x: Could not find match data for *{label}*.")
 
 
 # ──────────────────────────────────────────────
@@ -223,12 +227,12 @@ def _post_match_worker(body, respond):
     user_id = body.get("user_id", "")
     lead_id = os.environ.get("SCOUTING_LEAD_SLACK_ID", "")
     if user_id != lead_id:
-        respond(":x: Only the scouting lead can use this command.", response_type="ephemeral")
+        reply(":x: Only the scouting lead can use this command.")
         return
 
     label = body.get("text", "").strip().upper()
     if not label:
-        respond(":x: Usage: `/post-match QM12`", response_type="ephemeral")
+        reply(":x: Usage: `/post-match QM12`")
         return
 
     import tba
@@ -237,7 +241,7 @@ def _post_match_worker(body, respond):
     match_info = tba.get_match(tba_key)
 
     if not match_info or not match_info.get("alliances"):
-        respond(f":x: No results yet for *{label}*.", response_type="ephemeral")
+        reply(f":x: No results yet for *{label}*.")
         return
 
     red = match_info["alliances"]["red"]["team_keys"]
@@ -246,7 +250,7 @@ def _post_match_worker(body, respond):
     blue_score = match_info["alliances"]["blue"].get("score", -1)
 
     if red_score < 0:
-        respond(f":x: *{label}* hasn't been played yet.", response_type="ephemeral")
+        reply(f":x: *{label}* hasn't been played yet.")
         return
 
     red_str = " | ".join(t.replace("frc", "") for t in red)
@@ -279,7 +283,7 @@ def _post_match_worker(body, respond):
         channel="district-championships",
         text="\n".join(lines)
     )
-    respond(":white_check_mark: Posted to #district-championships.", response_type="ephemeral")
+    reply(":white_check_mark: Posted to #district-championships.")
 
 # ──────────────────────────────────────────────
 # /push MATCH
@@ -291,12 +295,12 @@ def cmd_push(ack, body, respond):
     match_label = body.get("text", "").strip()
 
     if not match_label:
-        respond(":x: Usage: `/push QM12`", response_type="ephemeral")
+        reply(":x: Usage: `/push QM12`")
         return
 
     event_key = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
     result = scheduler.trigger_match_queuing(match_label, event_key)
-    respond(result, response_type="ephemeral")
+    reply(result)
 
 
 # ──────────────────────────────────────────────
@@ -310,7 +314,7 @@ def cmd_confirm(ack, body, respond):
     parts = text.split(None, 1)
 
     if len(parts) < 2:
-        respond(":x: Usage: `/confirm QM12 Kaveesh`", response_type="ephemeral")
+        reply(":x: Usage: `/confirm QM12 Kaveesh`")
         return
 
     match_label, scout_name = parts[0].upper(), parts[1].strip()
@@ -337,7 +341,7 @@ def cmd_refresh_schedule(ack, body, respond):
         )
     except Exception as e:
         logger.error("Schedule refresh failed: %s", e)
-        respond(f":x: Failed to refresh schedule: {e}", response_type="ephemeral")
+        reply(f":x: Failed to refresh schedule: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -356,7 +360,7 @@ def cmd_nexus_status(ack, body, respond):
     try:
         resp = httpx.get(url, headers={"Nexus-Api-Key": nexus_api_key}, timeout=10.0)
         if resp.status_code != 200:
-            respond(f":x: Nexus API returned {resp.status_code}", response_type="ephemeral")
+            reply(f":x: Nexus API returned {resp.status_code}")
             return
 
         data = resp.json()
@@ -379,7 +383,7 @@ def cmd_nexus_status(ack, body, respond):
 
     except Exception as e:
         logger.error("Nexus status pull failed: %s", e)
-        respond(f":x: Could not reach Nexus API: {e}", response_type="ephemeral")
+        reply(f":x: Could not reach Nexus API: {e}")
 
 
 # ──────────────────────────────────────────────
