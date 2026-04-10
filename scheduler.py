@@ -34,10 +34,10 @@ def _match_display(tba_key: str) -> str:
 
 def send_queuing_alerts(match_label: str, tba_key: str) -> None:
     """DM all scouts for this match that it is now queuing."""
-    if not match_label.upper().startswith("QM"):
+    display = match_label_to_display(match_label)
+    if not display.upper().startswith("QM"):
         logger.info("Skipping non-qual match: %s", match_label)
         return
-    display = match_label_to_display(match_label)
     scouts = sheets.get_all_scouts_for_match(match_label)
 
     if not scouts:

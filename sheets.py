@@ -27,7 +27,7 @@ def _get_client() -> gspread.Client:
 
 
 def parse_names(cell_value: str) -> list[str]:
-    """Extract scout names from a cell value, ignoring team numbers and keywords."""
+    """Extract scout names from a cell value, ignoring team numbers, keywords, and note text."""
     if not cell_value:
         return []
     names = []
@@ -35,9 +35,24 @@ def parse_names(cell_value: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
+        # Skip pure team number lines
         if re.match(r"^[\d,\s]+$", line):
-            continue  # skip team numbers
-        if line.upper() in ("BREAK", "FLUID PIT SCOUTING", "X"):
+            continue
+        # Skip known keyword placeholders
+        if line.upper() in ("BREAK", "FLUID PIT SCOUTING", "X", "TBD", "N/A"):
+            continue
+        # Skip lines with note/assignment formatting characters
+        if any(c in line for c in ("\u2192", "|", "[", "]", "(for")):
+            continue
+        if ":" in line:
+            continue
+        # Skip lines that are too long or have too many words to be a name
+        if len(line) > 30:
+            continue
+        if len(line.split()) > 3:
+            continue
+        # Skip lines starting with lowercase (instructions, not names)
+        if line[0].islower():
             continue
         names.append(line)
     return names

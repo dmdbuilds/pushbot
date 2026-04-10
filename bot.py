@@ -40,7 +40,7 @@ def cmd_scouting_status(ack, body, respond):
         match_label = text
         roles = sheets.get_scouts_for_match(match_label)
         if not roles:
-            reply(f":x: No scouts found for *{match_label}* in the schedule.")
+            respond(f":x: No scouts found for *{match_label}* in the schedule.", response_type="ephemeral")
             return
 
         lines = [f":mag: *Scouting status for {match_label}*"]
@@ -61,7 +61,7 @@ def cmd_scouting_status(ack, body, respond):
             polling = set(state.polling_matches.keys())
 
         if not queuing and not polling:
-            reply(":zzz: No active matches right now.")
+            respond(":zzz: No active matches right now.", response_type="ephemeral")
             return
 
         lines = [":clipboard: *Active Match Overview*"]
@@ -93,12 +93,12 @@ def cmd_my_shift(ack, body, respond):
 
     if not name:
         # Default to the caller if possible — but we only have Slack user ID
-        reply(":x: Usage: `/my-shift Name` — e.g. `/my-shift Kaveesh`")
+        respond(":x: Usage: `/my-shift Name` — e.g. `/my-shift Kaveesh`", response_type="ephemeral")
         return
 
     shifts = sheets.get_shifts_for_scout(name)
     if not shifts:
-        reply(f":x: No shifts found for *{name}* in the schedule.")
+        respond(f":x: No shifts found for *{name}* in the schedule.", response_type="ephemeral")
         return
 
     lines = [f":calendar: *Shifts for {name}*"]
