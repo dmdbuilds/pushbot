@@ -153,6 +153,8 @@ def get_all_scouts_for_match(match_label: str) -> list[tuple[str, str]]:
     roles = get_scouts_for_match(match_label)
     result = []
     for role, names in roles.items():
+            if role not in ["Blue Scout 1","Blue Scout 2","Blue Scout 3","Red Scout 1","Red Scout 2","Red Scout 3"]:
+                continue
         for name in names:
             result.append((name, role))
     return result
@@ -176,8 +178,10 @@ def get_shifts_for_scout(scout_name: str) -> list[tuple[str, str]]:
     schedule = get_schedule()
     shifts = []
     name_lower = scout_name.lower()
-    for match_label, roles in sorted(schedule.items()):
+    for match_label, roles in sorted(schedule.items(), key=lambda x: int(re.sub(r"[^0-9]", "0", x[0]))):
         for role, names in roles.items():
+            if role not in ["Blue Scout 1","Blue Scout 2","Blue Scout 3","Red Scout 1","Red Scout 2","Red Scout 3"]:
+                continue
             for name in names:
                 if name_lower in name.lower() or name.lower() in name_lower:
                     shifts.append((match_label, role))
