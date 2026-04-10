@@ -179,6 +179,6 @@ def get_shifts_for_scout(scout_name: str) -> list[tuple[str, str]]:
     for match_label, roles in sorted(schedule.items()):
         for role, names in roles.items():
             for name in names:
-                if name.lower() == name_lower:
+                if name_lower in name.lower() or name.lower() in name_lower:
                     shifts.append((match_label, role))
     return shifts
