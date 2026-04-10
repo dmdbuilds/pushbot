@@ -107,3 +107,16 @@ def update_nexus_match_time(match_label: str, data_as_of_time: int) -> bool:
             return False
         last_nexus_match_time[match_label] = data_as_of_time
         return True
+
+# Tracks which matches have had their post-match summary posted
+posted_summaries: set[str] = set()
+
+
+def is_summary_posted(match_key: str) -> bool:
+    with lock:
+        return match_key in posted_summaries
+
+
+def mark_summary_posted(match_key: str) -> None:
+    with lock:
+        posted_summaries.add(match_key)

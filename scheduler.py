@@ -133,24 +133,31 @@ def _post_match_summary(display: str, tba_key: str) -> None:
         bd = match_info.get("score_breakdown") or {}
         ours = bd.get("red" if we_red else "blue", {})
 
+        # Wait until score breakdown is fully populated before posting
+        auto_pts = ours.get("autoPoints", 0) if ours else 0
+        teleop_pts = ours.get("teleopPoints", 0) if ours else 0
+        endgame_pts = ours.get("endgamePoints", 0) if ours else 0
+        total_breakdown = auto_pts + teleop_pts + endgame_pts
+
+        if not ours or total_breakdown == 0:
+            logger.info("Score breakdown not ready for %s — will retry next poll", display)
+            return
+
         lines = [
-            f":robot_face: *{display} Result — Team 7419*",
+            f":robot_face: *{display} — Team 7419*",
             f":red_circle: Red:  {red_str} — {red_score} pts",
             f":large_blue_circle: Blue: {blue_str} — {blue_score} pts",
             f"",
             f"*7419: {result}* ({our_score} – {opp_score})",
+            f"Auto: {auto_pts} | Teleop: {teleop_pts} | Endgame: {endgame_pts}",
         ]
-        if ours:
-            lines.append(
-                f"Auto: {ours.get('autoPoints', 0)} | "
-                f"Teleop: {ours.get('teleopPoints', 0)} | "
-                f"Endgame: {ours.get('endgamePoints', 0)}"
-            )
 
         slack_utils.get_client().chat_postMessage(
             channel=results_channel,
             text="\n".join(lines),
         )
+        state.mark_summary_posted(tba_key)
+        state.stop_polling(tba_key)
         logger.info("Auto post-match summary posted for %s", display)
 
     except Exception as e:
@@ -236,7 +243,6 @@ async def poll_match(match_key: str, match_label: str) -> None:
         if state.mark_done(match_key):
             logger.info("Match %s results detected — firing alerts", match_key)
             send_results_alerts(match_label, match_key)
-            state.stop_polling(match_key)
 
             # Start confirmation timer in a thread
             import threading
@@ -246,6 +252,13 @@ async def poll_match(match_key: str, match_label: str) -> None:
                 daemon=True,
             )
             t.start()
+        else:
+            # Already marked done — check if post-match summary still needs posting
+            # (score breakdown may not have been ready on first attempt)
+            display = match_label_to_display(match_label)
+            results_channel = __import__("os").environ.get("RESULTS_CHANNEL_ID", "")
+            if results_channel and not state.is_summary_posted(match_key):
+                _post_match_summary(display, match_key)
 
 
 async def polling_loop() -> None:
