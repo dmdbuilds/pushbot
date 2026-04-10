@@ -38,12 +38,12 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
     if not display.upper().startswith("QM"):
         logger.info("Skipping non-qual match: %s", match_label)
         return
-    scouts = sheets.get_all_scouts_for_match(display)
+    scouts = sheets.get_match_scouts_only(display)
 
     if not scouts:
-        logger.warning("No scouts found for %s — queuing alert skipped", match_label)
+        logger.warning("No match scouts found for %s — queuing alert skipped", match_label)
         slack_utils.dm_lead(
-            f":warning: *Push Bot* — No scouts found in schedule for *{display}* (queuing). "
+            f":warning: *Push Bot* — No match scouts found in schedule for *{display}* (queuing). "
             f"Check the Google Sheet."
         )
         return
@@ -51,41 +51,26 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
     for name, role in scouts:
         text = (
             f":bell: *Push Bot* — {display} is NOW QUEUING\n"
-            f"Role: {role}\n"
             f"Head to the field! :runner:\n"
-            f"We'll ping you when results are posted to submit Lovat."
+            f"Submit Lovat when results post."
         )
         slack_utils.dm_scout(name, text)
 
-    logger.info("Queuing alerts sent for %s to %d scouts", display, len(scouts))
+    logger.info("Queuing alerts sent for %s to %d match scouts", display, len(scouts))
 
 
 def send_ondeck_alerts(match_label: str, tba_key: str) -> None:
-    """DM match scouts only that the match is on deck."""
-    display = match_label_to_display(match_label)
-    scouts = sheets.get_match_scouts_only(display)
-
-    if not scouts:
-        logger.info("No match scouts for %s — on-deck alert skipped", match_label)
-        return
-
-    for name, role in scouts:
-        text = (
-            f":zap: {display} is ON DECK — robot should be on field now!\n"
-            f"Role: {role}"
-        )
-        slack_utils.dm_scout(name, text)
-
-    logger.info("On-deck alerts sent for %s to %d match scouts", display, len(scouts))
+    """On-deck alerts disabled — match scouts only get queuing + results DMs."""
+    logger.info("On-deck alert suppressed for %s", match_label)
 
 
 def send_results_alerts(match_label: str, tba_key: str) -> None:
     """DM all scouts that results are posted and to submit Lovat."""
     display = match_label_to_display(match_label)
-    scouts = sheets.get_all_scouts_for_match(display)
+    scouts = sheets.get_match_scouts_only(display)
 
     if not scouts:
-        logger.warning("No scouts found for %s — results alert skipped", match_label)
+        logger.warning("No match scouts found for %s — results alert skipped", match_label)
         return
 
     for name, role in scouts:
@@ -96,7 +81,7 @@ def send_results_alerts(match_label: str, tba_key: str) -> None:
         )
         slack_utils.dm_scout(name, text)
 
-    logger.info("Results alerts sent for %s to %d scouts", display, len(scouts))
+    logger.info("Results alerts sent for %s to %d match scouts", display, len(scouts))
 
 
 def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
@@ -111,7 +96,7 @@ def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
     time.sleep(confirm_wait)
 
     display = match_label_to_display(match_label)
-    scouts = sheets.get_all_scouts_for_match(display)
+    scouts = sheets.get_match_scouts_only(display)
     unconfirmed = [name for name, role in scouts if not state.is_confirmed(display, name)]
 
     if not unconfirmed:
