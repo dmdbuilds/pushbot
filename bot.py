@@ -117,106 +117,64 @@ def cmd_my_shift(ack, body, respond):
 def cmd_match_stats(ack, body, respond):
     ack()
     import threading
-    threading.Thread(target=_match_stats_worker, args=(body, respond)).start()
-
-def _match_stats_worker(body, respond):
-    label = body.get("text", "").strip().upper()
-    user_id = body.get("user_id", "")
-    channel_id = body.get("channel_id", "")
-    def reply(text):
-        app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=text)
-    if not label:
-        reply(":x: Usage: `/match-stats QM12`")
-        return
-
-    import tba, nexus as nxs
-    TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
-
-    # Get alliance info from schedule
-    schedule = sheets.get_schedule()
-    match_data = schedule.get(label, {})
-
-    # Build alliance string from TBA match data
-    tba_key = f"{TBA_EVENT}_{label.lower()}"
-    match_info = tba.get_match(tba_key)
-
-    if match_info and match_info.get("alliances"):
-        red = match_info["alliances"]["red"]["team_keys"]
-        blue = match_info["alliances"]["blue"]["team_keys"]
-        red_str = " | ".join(t.replace("frc", "") for t in red)
-        blue_str = " | ".join(t.replace("frc", "") for t in blue)
-
-        red_score = match_info["alliances"]["red"].get("score", -1)
-        blue_score = match_info["alliances"]["blue"].get("score", -1)
-
-        # Check Nexus state
-        nexus_state = nxs.get_current_state()
-        now_queuing = nexus_state.get("now_queuing", "") if nexus_state else ""
-        on_deck = nexus_state.get("on_deck", "") if nexus_state else ""
-        now_label = nxs.match_label_to_display(now_queuing) if now_queuing else ""
-        deck_label = nxs.match_label_to_display(on_deck) if on_deck else ""
-
-        if red_score >= 0 and blue_score >= 0:
-            # Match played
-            winner = ""
-            if red_score > blue_score:
-                winner = " 🏆"
-                red_str += winner
-            elif blue_score > red_score:
-                winner = " 🏆"
-                blue_str += winner
-
-            bd = match_info.get("score_breakdown") or {}
-            r = bd.get("red", {})
-            b = bd.get("blue", {})
-
-            lines = [
-                f":checkered_flag: *{label} — Final*",
-                f"🔴 Red:  {red_str} — *{red_score} pts*",
-                f"🔵 Blue: {blue_str} — *{blue_score} pts*",
-            ]
-            if r and b:
-                lines += [
-                    f"Auto:    Red {r.get('autoPoints',0)} | Blue {b.get('autoPoints',0)}",
-                    f"Teleop:  Red {r.get('teleopPoints',0)} | Blue {b.get('teleopPoints',0)}",
-                    f"Endgame: Red {r.get('endgamePoints',0)} | Blue {b.get('endgamePoints',0)}",
-                    f"Fouls:   Red {r.get('foulPoints',0)} | Blue {b.get('foulPoints',0)}",
+    def work():
+        try:
+            label = body.get("text", "").strip().upper()
+            user_id = body.get("user_id", "")
+            channel_id = body.get("channel_id", "")
+            if not label:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Usage: `/match-stats QM12`")
+                return
+            import httpx
+            TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
+            tba_key = f"{TBA_EVENT}_{label.lower()}"
+            headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+            r = httpx.get(f"https://www.thebluealliance.com/api/v3/match/{tba_key}", headers=headers, timeout=8.0)
+            match_info = r.json() if r.status_code == 200 else None
+            if not match_info or not match_info.get("alliances"):
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=f":x: No data found for *{label}*. Match may not exist or TBA hasn't posted it yet.")
+                return
+            red_teams = match_info["alliances"]["red"]["team_keys"]
+            blue_teams = match_info["alliances"]["blue"]["team_keys"]
+            red_str = " | ".join(t.replace("frc", "") for t in red_teams)
+            blue_str = " | ".join(t.replace("frc", "") for t in blue_teams)
+            red_score = match_info["alliances"]["red"].get("score", -1)
+            blue_score = match_info["alliances"]["blue"].get("score", -1)
+            if red_score >= 0 and blue_score >= 0:
+                bd = match_info.get("score_breakdown") or {}
+                r2 = bd.get("red", {})
+                b2 = bd.get("blue", {})
+                winner_red = " :trophy:" if red_score > blue_score else ""
+                winner_blue = " :trophy:" if blue_score > red_score else ""
+                lines = [
+                    f":checkered_flag: *{label} — Final*",
+                    f":red_circle: Red:  {red_str} — *{red_score} pts*{winner_red}",
+                    f":large_blue_circle: Blue: {blue_str} — *{blue_score} pts*{winner_blue}",
                 ]
-        elif now_label == label:
-            lines = [
-                f":yellow_circle: *{label} — Now Queuing*",
-                f"🔴 Red:  {red_str}",
-                f"🔵 Blue: {blue_str}",
-                f":warning: Scouts should be at the field now!",
-            ]
-        elif deck_label == label:
-            lines = [
-                f":large_orange_circle: *{label} — On Deck*",
-                f"🔴 Red:  {red_str}",
-                f"🔵 Blue: {blue_str}",
-                f":walking: Scouts should be heading to the field.",
-            ]
-        else:
-            lines = [
-                f":clock1: *{label} — Not started yet*",
-                f"🔴 Red:  {red_str}",
-                f"🔵 Blue: {blue_str}",
-            ]
-
-        # Add scouting assignments
-        scout_assignments = sheets.get_match_scouts_only(label)
-        if scout_assignments:
-            scout_str = " | ".join(f"{name} → {role}" for name, role in scout_assignments)
-            lines.append(f":clipboard: Scouting: {scout_str}")
-
-        respond("\n".join(lines), response_type="ephemeral")
-    else:
-        reply(f":x: Could not find match data for *{label}*.")
+                if r2 and b2:
+                    lines.append(f"Auto: Red {r2.get('autoPoints',0)} | Blue {b2.get('autoPoints',0)}")
+                    lines.append(f"Teleop: Red {r2.get('teleopPoints',0)} | Blue {b2.get('teleopPoints',0)}")
+                    lines.append(f"Endgame: Red {r2.get('endgamePoints',0)} | Blue {b2.get('endgamePoints',0)}")
+            else:
+                lines = [
+                    f":clock1: *{label} — Not played yet*",
+                    f":red_circle: Red:  {red_str}",
+                    f":large_blue_circle: Blue: {blue_str}",
+                ]
+            scout_assignments = sheets.get_match_scouts_only(label)
+            if scout_assignments:
+                scout_str = " | ".join(f"{name} ({role})" for name, role in scout_assignments)
+                lines.append(f":clipboard: Scouting: {scout_str}")
+            app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
+        except Exception as e:
+            logger.error("match-stats error: %s", e)
+            try:
+                app.client.chat_postEphemeral(channel=body.get("channel_id",""), user=body.get("user_id",""), text=f":x: Error: {e}")
+            except:
+                pass
+    threading.Thread(target=work).start()
 
 
-# ──────────────────────────────────────────────
-# /post-match MATCH
-# ──────────────────────────────────────────────
 @app.command("/post-match")
 def cmd_post_match(ack, body, respond):
     ack()
