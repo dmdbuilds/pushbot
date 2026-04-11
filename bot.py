@@ -152,9 +152,15 @@ def cmd_match_stats(ack, body, respond):
                     f":large_blue_circle: Blue: {blue_str} — *{blue_score} pts*{winner_blue}",
                 ]
                 if r2 and b2:
-                    lines.append(f"Auto: Red {r2.get('autoPoints',0)} | Blue {b2.get('autoPoints',0)}")
-                    lines.append(f"Teleop: Red {r2.get('teleopPoints',0)} | Blue {b2.get('teleopPoints',0)}")
-                    lines.append(f"Endgame: Red {r2.get('endgamePoints',0)} | Blue {b2.get('endgamePoints',0)}")
+                    r_auto = r2.get("totalAutoPoints", r2.get("autoPoints", 0))
+                    b_auto = b2.get("totalAutoPoints", b2.get("autoPoints", 0))
+                    r_teleop = r2.get("totalTeleopPoints", r2.get("teleopPoints", 0))
+                    b_teleop = b2.get("totalTeleopPoints", b2.get("teleopPoints", 0))
+                    r_end = (r2.get("hubScore") or {}).get("endgamePoints", r2.get("endGameTowerPoints", 0))
+                    b_end = (b2.get("hubScore") or {}).get("endgamePoints", b2.get("endGameTowerPoints", 0))
+                    lines.append(f"Auto: Red {r_auto} | Blue {b_auto}")
+                    lines.append(f"Teleop: Red {r_teleop} | Blue {b_teleop}")
+                    lines.append(f"Endgame: Red {r_end} | Blue {b_end}")
             else:
                 lines = [
                     f":clock1: *{label} — Not played yet*",
