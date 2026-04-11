@@ -221,7 +221,8 @@ def cmd_post_match(ack, body, respond):
             # 2026 RECON field names
             auto_pts = ours.get("totalAutoPoints", ours.get("autoPoints", 0))
             teleop_pts = ours.get("totalTeleopPoints", ours.get("teleopPoints", 0))
-            endgame_pts = ours.get("endGameTowerPoints", ours.get("endgamePoints", 0))
+            hub = ours.get("hubScore") or {}
+            endgame_pts = hub.get("endgamePoints", ours.get("endGameTowerPoints", ours.get("endgamePoints", 0)))
             lines = [
                 f":robot_face: *{label} Result — Team 7419*",
                 f":red_circle: Red:  {red_str} — {red_score} pts",
