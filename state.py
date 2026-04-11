@@ -101,15 +101,20 @@ def set_etag(match_key: str, etag: str) -> None:
             polling_matches[match_key]["etag"] = etag
 
 
+def _normalize_name(name: str) -> str:
+    """Lowercase and strip to first name only (first word)."""
+    return name.strip().lower().split()[0] if name.strip() else ""
+
+
 def confirm_scout(match_label: str, scout_name: str) -> None:
-    key = f"{match_label}:{scout_name}"
+    key = f"{match_label.upper()}:{_normalize_name(scout_name)}"
     with lock:
         confirmed_scouts[key] = True
         _save_confirmations()
 
 
 def is_confirmed(match_label: str, scout_name: str) -> bool:
-    key = f"{match_label}:{scout_name}"
+    key = f"{match_label.upper()}:{_normalize_name(scout_name)}"
     with lock:
         return confirmed_scouts.get(key, False)
 
