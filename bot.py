@@ -215,15 +215,21 @@ def cmd_post_match(ack, body, respond):
             result = "WIN :white_check_mark:" if our_score > opp_score else ("TIE :arrow_right:" if our_score == opp_score else "LOSS :x:")
             bd = match_info.get("score_breakdown") or {}
             ours = bd.get("red" if we_red else "blue", {})
+            if not ours:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=f":x: Score breakdown not ready yet for *{label}* — try again in 30 seconds.")
+                return
+            # 2026 RECON field names
+            auto_pts = ours.get("totalAutoPoints", ours.get("autoPoints", 0))
+            teleop_pts = ours.get("totalTeleopPoints", ours.get("teleopPoints", 0))
+            endgame_pts = ours.get("endGameTowerPoints", ours.get("endgamePoints", 0))
             lines = [
                 f":robot_face: *{label} Result — Team 7419*",
                 f":red_circle: Red:  {red_str} — {red_score} pts",
                 f":large_blue_circle: Blue: {blue_str} — {blue_score} pts",
                 f"",
                 f"*7419: {result}* ({our_score} – {opp_score})",
+                f"Auto: {auto_pts} | Teleop: {teleop_pts} | Endgame: {endgame_pts}",
             ]
-            if ours:
-                lines.append(f"Auto: {ours.get('autoPoints',0)} | Teleop: {ours.get('teleopPoints',0)} | Endgame: {ours.get('endgamePoints',0)}")
             app.client.chat_postMessage(channel="district-championships", text="\n".join(lines))
             app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":white_check_mark: Posted to #district-championships.")
         except Exception as e:
