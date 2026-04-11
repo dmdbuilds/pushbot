@@ -15,6 +15,30 @@ polling_matches: dict[str, dict] = {}
 # Manual scout confirmations: 'QM12:Kaveesh' → True
 confirmed_scouts: dict[str, bool] = {}
 
+_CONFIRM_FILE = "/tmp/pushbot_confirmations.json"
+
+def _load_confirmations() -> None:
+    """Load persisted confirmations from disk on startup."""
+    global confirmed_scouts
+    import json, os
+    if os.path.exists(_CONFIRM_FILE):
+        try:
+            with open(_CONFIRM_FILE, "r") as f:
+                confirmed_scouts = json.load(f)
+        except Exception:
+            confirmed_scouts = {}
+
+def _save_confirmations() -> None:
+    """Persist confirmations to disk."""
+    import json
+    try:
+        with open(_CONFIRM_FILE, "w") as f:
+            json.dump(confirmed_scouts, f)
+    except Exception:
+        pass
+
+_load_confirmations()
+
 # Last processed dataAsOfTime per event key (for Nexus dedup)
 last_nexus_time: dict[str, int] = {}
 
@@ -81,6 +105,7 @@ def confirm_scout(match_label: str, scout_name: str) -> None:
     key = f"{match_label}:{scout_name}"
     with lock:
         confirmed_scouts[key] = True
+        _save_confirmations()
 
 
 def is_confirmed(match_label: str, scout_name: str) -> bool:
