@@ -214,7 +214,7 @@ def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
     time.sleep(escalate_wait)
 
     # Re-check after escalation wait
-    still_unconfirmed = [n for n in unconfirmed if not state.is_confirmed(match_label, n)]
+    still_unconfirmed = [n for n in unconfirmed if not state.is_confirmed(display, n)]
 
     if not still_unconfirmed:
         logger.info("All scouts confirmed for %s after follow-up", display)
