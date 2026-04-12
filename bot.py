@@ -165,14 +165,10 @@ def cmd_match_stats(ack, body, respond):
                 ]
                 wp = _get_win_prob(tba_key)
                 if wp:
-                    we_red = "frc7419" in [t for t in match_info["alliances"]["red"]["team_keys"]]
-                    our_win_prob = wp["red_win_prob"] if we_red else (1 - wp["red_win_prob"])
-                    pred_our = wp["pred_red"] if we_red else wp["pred_blue"]
-                    pred_opp = wp["pred_blue"] if we_red else wp["pred_red"]
-                    prob_pct = round(our_win_prob * 100)
-                    bar = "█" * (prob_pct // 10) + "░" * (10 - prob_pct // 10)
-                    lines.append(f":bar_chart: 7419 win prob: *{prob_pct}%* {bar}")
-                    lines.append(f":memo: Predicted: *{round(pred_our)}* – {round(pred_opp)}")
+                    red_pct = round(wp["red_win_prob"] * 100)
+                    blue_pct = 100 - red_pct
+                    lines.append(f":red_circle: Red win prob: *{red_pct}%* | Predicted: *{round(wp['pred_red'])} pts*")
+                    lines.append(f":large_blue_circle: Blue win prob: *{blue_pct}%* | Predicted: *{round(wp['pred_blue'])} pts*")
             scout_assignments = sheets.get_match_scouts_only(label)
             if scout_assignments:
                 scout_str = " | ".join(f"{name} ({role})" for name, role in scout_assignments)
@@ -402,14 +398,13 @@ def cmd_next_match(ack, body, respond):
             ]
             wp = _get_win_prob(next_key)
             if wp:
-                our_win_prob = wp["red_win_prob"] if we_red else (1 - wp["red_win_prob"])
-                opp_win_prob = 1 - our_win_prob
-                pred_our = wp["pred_red"] if we_red else wp["pred_blue"]
-                pred_opp = wp["pred_blue"] if we_red else wp["pred_red"]
-                prob_pct = round(our_win_prob * 100)
-                bar = "█" * (prob_pct // 10) + "░" * (10 - prob_pct // 10)
-                lines.append(f":bar_chart: Win prob: *{prob_pct}%* {bar}")
-                lines.append(f":memo: Predicted score: *{round(pred_our)}* – {round(pred_opp)}")
+                red_pct = round(wp["red_win_prob"] * 100)
+                blue_pct = 100 - red_pct
+                our_pct = red_pct if we_red else blue_pct
+                prob_icon = ":large_green_circle:" if our_pct >= 70 else (":large_yellow_circle:" if our_pct >= 45 else ":red_circle:")
+                lines.append(f":red_circle: Red win prob: *{red_pct}%* | Predicted: *{round(wp['pred_red'])} pts*")
+                lines.append(f":large_blue_circle: Blue win prob: *{blue_pct}%* | Predicted: *{round(wp['pred_blue'])} pts*")
+                lines.append(f"{prob_icon} 7419 win prob: *{our_pct}%*")
             app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
         except Exception as e:
             logger.error("next-match error: %s", e)
