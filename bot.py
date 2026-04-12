@@ -163,6 +163,16 @@ def cmd_match_stats(ack, body, respond):
                     f":red_circle: Red:  {red_str}",
                     f":large_blue_circle: Blue: {blue_str}",
                 ]
+                wp = _get_win_prob(tba_key)
+                if wp:
+                    we_red = "frc7419" in [t for t in match_info["alliances"]["red"]["team_keys"]]
+                    our_win_prob = wp["red_win_prob"] if we_red else (1 - wp["red_win_prob"])
+                    pred_our = wp["pred_red"] if we_red else wp["pred_blue"]
+                    pred_opp = wp["pred_blue"] if we_red else wp["pred_red"]
+                    prob_pct = round(our_win_prob * 100)
+                    bar = "█" * (prob_pct // 10) + "░" * (10 - prob_pct // 10)
+                    lines.append(f":bar_chart: 7419 win prob: *{prob_pct}%* {bar}")
+                    lines.append(f":memo: Predicted: *{round(pred_our)}* – {round(pred_opp)}")
             scout_assignments = sheets.get_match_scouts_only(label)
             if scout_assignments:
                 scout_str = " | ".join(f"{name} ({role})" for name, role in scout_assignments)
@@ -390,6 +400,16 @@ def cmd_next_match(ack, body, respond):
                 f":large_blue_circle: Blue: {blue_teams}",
                 f"{our_color} *7419 is on {'Red' if we_red else 'Blue'}*",
             ]
+            wp = _get_win_prob(next_key)
+            if wp:
+                our_win_prob = wp["red_win_prob"] if we_red else (1 - wp["red_win_prob"])
+                opp_win_prob = 1 - our_win_prob
+                pred_our = wp["pred_red"] if we_red else wp["pred_blue"]
+                pred_opp = wp["pred_blue"] if we_red else wp["pred_red"]
+                prob_pct = round(our_win_prob * 100)
+                bar = "█" * (prob_pct // 10) + "░" * (10 - prob_pct // 10)
+                lines.append(f":bar_chart: Win prob: *{prob_pct}%* {bar}")
+                lines.append(f":memo: Predicted score: *{round(pred_our)}* – {round(pred_opp)}")
             app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
         except Exception as e:
             logger.error("next-match error: %s", e)
@@ -459,6 +479,30 @@ def cmd_whos_scouting(ack, body, respond):
         return
     names = " | ".join(name for name, role in scouts)
     respond(f":clipboard: *{label} scouts:* {names}", response_type="ephemeral")
+
+
+# ──────────────────────────────────────────────
+# Statbotics win probability helper
+# ──────────────────────────────────────────────
+
+def _get_win_prob(tba_key: str) -> dict | None:
+    """Fetch win probability from Statbotics for an unplayed match."""
+    try:
+        import httpx
+        r = httpx.get(f"https://api.statbotics.io/v3/match/{tba_key}", timeout=6.0)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        pred = data.get("pred") or {}
+        if not pred:
+            return None
+        return {
+            "red_win_prob": pred.get("red_win_prob", 0.5),
+            "pred_red": pred.get("red_score", 0),
+            "pred_blue": pred.get("blue_score", 0),
+        }
+    except Exception:
+        return None
 
 
 # ──────────────────────────────────────────────
