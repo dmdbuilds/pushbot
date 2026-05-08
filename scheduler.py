@@ -56,8 +56,23 @@ def send_queuing_alerts(match_label: str, tba_key: str) -> None:
 
 
 def send_ondeck_alerts(match_label: str, tba_key: str) -> None:
-    """On-deck alerts disabled — match scouts only get queuing + results DMs."""
-    logger.info("On-deck alert suppressed for %s", match_label)
+    """DM match scouts when match is on deck — robot should be heading to field."""
+    display = match_label_to_display(match_label)
+    if not display.upper().startswith("QM"):
+        logger.info("Skipping non-qual on-deck: %s", match_label)
+        return
+    scouts = sheets.get_match_scouts_only(display)
+    if not scouts:
+        logger.info("No match scouts for %s — skipping on-deck alert", display)
+        return
+    for name, role in scouts:
+        text = (
+            f":bell: *Push Bot* — {display} is ON DECK\n"
+            f"Head to the field now! :runner:\n"
+            f"Submit Lovat when results post."
+        )
+        slack_utils.dm_scout(name, text)
+    logger.info("On-deck alerts sent for %s to %d match scouts", display, len(scouts))
 
 
 def send_results_alerts(match_label: str, tba_key: str) -> None:
@@ -199,7 +214,7 @@ def _run_confirmation_followup(match_label: str, tba_key: str) -> None:
     time.sleep(escalate_wait)
 
     # Re-check after escalation wait
-    still_unconfirmed = [n for n in unconfirmed if not state.is_confirmed(match_label, n)]
+    still_unconfirmed = [n for n in unconfirmed if not state.is_confirmed(display, n)]
 
     if not still_unconfirmed:
         logger.info("All scouts confirmed for %s after follow-up", display)

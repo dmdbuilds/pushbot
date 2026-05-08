@@ -36,20 +36,16 @@ def cmd_scouting_status(ack, body, respond):
     text = body.get("text", "").strip().upper()
 
     if text:
-        # Status for a specific match
-        match_label = text
-        roles = sheets.get_scouts_for_match(match_label)
-        if not roles:
-            respond(f":x: No scouts found for *{match_label}* in the schedule.", response_type="ephemeral")
+        match_label = text.replace(" ", "")
+        scouts = sheets.get_match_scouts_only(match_label)
+        if not scouts:
+            respond(f":x: No match scouts found for *{match_label}*.", response_type="ephemeral")
             return
-
         lines = [f":mag: *Scouting status for {match_label}*"]
-        for role, names in roles.items():
-            for name in names:
-                confirmed = state.is_confirmed(match_label, name)
-                icon = ":white_check_mark:" if confirmed else ":hourglass:"
-                lines.append(f"  {icon} {role}: {name}")
-
+        for name, role in scouts:
+            confirmed = state.is_confirmed(match_label, name)
+            icon = ":white_check_mark:" if confirmed else ":hourglass:"
+            lines.append(f"  {icon} {name}")
         respond("\n".join(lines), response_type="ephemeral")
 
     else:
@@ -152,15 +148,27 @@ def cmd_match_stats(ack, body, respond):
                     f":large_blue_circle: Blue: {blue_str} — *{blue_score} pts*{winner_blue}",
                 ]
                 if r2 and b2:
-                    lines.append(f"Auto: Red {r2.get('autoPoints',0)} | Blue {b2.get('autoPoints',0)}")
-                    lines.append(f"Teleop: Red {r2.get('teleopPoints',0)} | Blue {b2.get('teleopPoints',0)}")
-                    lines.append(f"Endgame: Red {r2.get('endgamePoints',0)} | Blue {b2.get('endgamePoints',0)}")
+                    r_auto = r2.get("totalAutoPoints", r2.get("autoPoints", 0))
+                    b_auto = b2.get("totalAutoPoints", b2.get("autoPoints", 0))
+                    r_teleop = r2.get("totalTeleopPoints", r2.get("teleopPoints", 0))
+                    b_teleop = b2.get("totalTeleopPoints", b2.get("teleopPoints", 0))
+                    r_end = (r2.get("hubScore") or {}).get("endgamePoints", r2.get("endGameTowerPoints", 0))
+                    b_end = (b2.get("hubScore") or {}).get("endgamePoints", b2.get("endGameTowerPoints", 0))
+                    lines.append(f"Auto: Red {r_auto} | Blue {b_auto}")
+                    lines.append(f"Teleop: Red {r_teleop} | Blue {b_teleop}")
+                    lines.append(f"Endgame: Red {r_end} | Blue {b_end}")
             else:
                 lines = [
                     f":clock1: *{label} — Not played yet*",
                     f":red_circle: Red:  {red_str}",
                     f":large_blue_circle: Blue: {blue_str}",
                 ]
+                wp = _get_win_prob(tba_key)
+                if wp:
+                    red_pct = round(wp["red_win_prob"] * 100)
+                    blue_pct = 100 - red_pct
+                    lines.append(f":red_circle: Red win prob: *{red_pct}%* | Predicted: *{round(wp['pred_red'])} pts*")
+                    lines.append(f":large_blue_circle: Blue win prob: *{blue_pct}%* | Predicted: *{round(wp['pred_blue'])} pts*")
             scout_assignments = sheets.get_match_scouts_only(label)
             if scout_assignments:
                 scout_str = " | ".join(f"{name} ({role})" for name, role in scout_assignments)
@@ -215,15 +223,22 @@ def cmd_post_match(ack, body, respond):
             result = "WIN :white_check_mark:" if our_score > opp_score else ("TIE :arrow_right:" if our_score == opp_score else "LOSS :x:")
             bd = match_info.get("score_breakdown") or {}
             ours = bd.get("red" if we_red else "blue", {})
+            if not ours:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=f":x: Score breakdown not ready yet for *{label}* — try again in 30 seconds.")
+                return
+            # 2026 RECON field names
+            auto_pts = ours.get("totalAutoPoints", ours.get("autoPoints", 0))
+            teleop_pts = ours.get("totalTeleopPoints", ours.get("teleopPoints", 0))
+            hub = ours.get("hubScore") or {}
+            endgame_pts = hub.get("endgamePoints", ours.get("endGameTowerPoints", ours.get("endgamePoints", 0)))
             lines = [
                 f":robot_face: *{label} Result — Team 7419*",
                 f":red_circle: Red:  {red_str} — {red_score} pts",
                 f":large_blue_circle: Blue: {blue_str} — {blue_score} pts",
                 f"",
                 f"*7419: {result}* ({our_score} – {opp_score})",
+                f"Auto: {auto_pts} | Teleop: {teleop_pts} | Endgame: {endgame_pts}",
             ]
-            if ours:
-                lines.append(f"Auto: {ours.get('autoPoints',0)} | Teleop: {ours.get('teleopPoints',0)} | Endgame: {ours.get('endgamePoints',0)}")
             app.client.chat_postMessage(channel="district-championships", text="\n".join(lines))
             app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":white_check_mark: Posted to #district-championships.")
         except Exception as e:
@@ -331,6 +346,300 @@ def cmd_nexus_status(ack, body, respond):
         logger.error("Nexus status pull failed: %s", e)
         respond(f":x: Could not reach Nexus API: {e}", response_type="ephemeral")
 
+
+
+
+# ──────────────────────────────────────────────
+# /next-match
+# ──────────────────────────────────────────────
+
+@app.command("/next-match")
+def cmd_next_match(ack, body, respond):
+    ack()
+    import threading
+    def work():
+        try:
+            import httpx
+            from datetime import datetime, timezone
+            user_id = body.get("user_id", "")
+            channel_id = body.get("channel_id", "")
+            TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
+            headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+            r = httpx.get(f"https://www.thebluealliance.com/api/v3/team/frc7419/event/{TBA_EVENT}/status", headers=headers, timeout=8.0)
+            if r.status_code != 200:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Could not fetch status from TBA.")
+                return
+            status = r.json()
+            next_key = status.get("next_match_key")
+            if not next_key:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":checkered_flag: No upcoming matches — quals may be over.")
+                return
+            r2 = httpx.get(f"https://www.thebluealliance.com/api/v3/match/{next_key}", headers=headers, timeout=8.0)
+            match = r2.json() if r2.status_code == 200 else None
+            if not match:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Could not fetch next match data.")
+                return
+            label = next_key.split("_", 1)[-1].upper()
+            red_teams = " | ".join(t.replace("frc", "") for t in match["alliances"]["red"]["team_keys"])
+            blue_teams = " | ".join(t.replace("frc", "") for t in match["alliances"]["blue"]["team_keys"])
+            we_red = "frc7419" in match["alliances"]["red"]["team_keys"]
+            our_color = ":red_circle:" if we_red else ":large_blue_circle:"
+            pred_time = match.get("predicted_time") or match.get("time")
+            if pred_time:
+                dt = datetime.fromtimestamp(pred_time, tz=timezone.utc).astimezone()
+                time_str = dt.strftime("%-I:%M %p")
+            else:
+                time_str = "TBD"
+            lines = [
+                f":calendar: *Next Match — {label}* (~{time_str})",
+                f":red_circle: Red:  {red_teams}",
+                f":large_blue_circle: Blue: {blue_teams}",
+                f"{our_color} *7419 is on {'Red' if we_red else 'Blue'}*",
+            ]
+            wp = _get_win_prob(next_key)
+            if wp:
+                red_pct = round(wp["red_win_prob"] * 100)
+                blue_pct = 100 - red_pct
+                our_pct = red_pct if we_red else blue_pct
+                prob_icon = ":large_green_circle:" if our_pct >= 70 else (":large_yellow_circle:" if our_pct >= 45 else ":red_circle:")
+                lines.append(f":red_circle: Red win prob: *{red_pct}%* | Predicted: *{round(wp['pred_red'])} pts*")
+                lines.append(f":large_blue_circle: Blue win prob: *{blue_pct}%* | Predicted: *{round(wp['pred_blue'])} pts*")
+                lines.append(f"{prob_icon} 7419 win prob: *{our_pct}%*")
+            app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
+        except Exception as e:
+            logger.error("next-match error: %s", e)
+    threading.Thread(target=work).start()
+
+
+# ──────────────────────────────────────────────
+# /standings
+# ──────────────────────────────────────────────
+
+@app.command("/standings")
+def cmd_standings(ack, body, respond):
+    ack()
+    import threading
+    def work():
+        try:
+            import httpx
+            user_id = body.get("user_id", "")
+            channel_id = body.get("channel_id", "")
+            TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
+            headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+            r = httpx.get(f"https://www.thebluealliance.com/api/v3/team/frc7419/event/{TBA_EVENT}/status", headers=headers, timeout=8.0)
+            if r.status_code != 200:
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Could not fetch standings.")
+                return
+            status = r.json()
+            qual = status.get("qual") or {}
+            ranking = qual.get("ranking") or {}
+            record = ranking.get("record") or {}
+            rank = ranking.get("rank", "?")
+            num_teams = qual.get("num_teams", "?")
+            wins = record.get("wins", 0)
+            losses = record.get("losses", 0)
+            ties = record.get("ties", 0)
+            rp = ranking.get("sort_orders", [0])[0] if ranking.get("sort_orders") else 0
+            matches_played = ranking.get("matches_played", 0)
+            if isinstance(rank, int):
+                rank_icon = ":trophy:" if rank <= 8 else (":green_circle:" if rank <= 16 else (":yellow_circle:" if rank <= 30 else ":red_circle:"))
+            else:
+                rank_icon = ":bar_chart:"
+            lines = [
+                f":bar_chart: *7419 Standings — DCMP 2026*",
+                f"{rank_icon} Rank: *{rank} / {num_teams}*",
+                f":trophy: Record: *{wins}W – {losses}L – {ties}T*",
+                f":sparkles: RP: *{rp:.2f}* ({matches_played} matches played)",
+            ]
+            app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
+        except Exception as e:
+            logger.error("standings error: %s", e)
+    threading.Thread(target=work).start()
+
+
+# ──────────────────────────────────────────────
+# /whos-scouting MATCH
+# ──────────────────────────────────────────────
+
+@app.command("/whos-scouting")
+def cmd_whos_scouting(ack, body, respond):
+    ack()
+    label = body.get("text", "").strip().upper().replace(" ", "")
+    if not label:
+        respond(":x: Usage: `/whos-scouting QM12`", response_type="ephemeral")
+        return
+    scouts = sheets.get_match_scouts_only(label)
+    if not scouts:
+        respond(f":x: No match scouts assigned for *{label}*.", response_type="ephemeral")
+        return
+    names = " | ".join(name for name, role in scouts)
+    respond(f":clipboard: *{label} scouts:* {names}", response_type="ephemeral")
+
+
+# ──────────────────────────────────────────────
+# Statbotics win probability helper
+# ──────────────────────────────────────────────
+
+def _get_win_prob(tba_key: str) -> dict | None:
+    """Fetch win probability from Statbotics for an unplayed match."""
+    try:
+        import httpx
+        r = httpx.get(f"https://api.statbotics.io/v3/match/{tba_key}", timeout=6.0)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        pred = data.get("pred") or {}
+        if not pred:
+            return None
+        return {
+            "red_win_prob": pred.get("red_win_prob", 0.5),
+            "pred_red": pred.get("red_score", 0),
+            "pred_blue": pred.get("blue_score", 0),
+        }
+    except Exception:
+        return None
+
+
+# ──────────────────────────────────────────────
+# EPA lookup helper (from bundled CSV)
+# ──────────────────────────────────────────────
+
+_EPA_CACHE: dict = {}
+
+def _get_epa(team_num: int) -> dict | None:
+    global _EPA_CACHE
+    if not _EPA_CACHE:
+        import csv
+        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "2026cancmp_team_insights.csv")
+        if not os.path.exists(csv_path):
+            return None
+        try:
+            with open(csv_path, encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        _EPA_CACHE[int(row["num"])] = {
+                            "total": float(row["total_epa"]),
+                            "auto": float(row["auto_epa"]),
+                            "teleop": float(row["teleop_epa"]),
+                            "end": float(row["endgame_epa"]),
+                        }
+                    except (ValueError, KeyError):
+                        pass
+        except Exception:
+            return None
+    return _EPA_CACHE.get(team_num)
+
+
+# ──────────────────────────────────────────────
+# /lookup TEAM#
+# ──────────────────────────────────────────────
+
+@app.command("/lookup")
+def cmd_lookup(ack, body, respond):
+    ack()
+    import threading
+    def work():
+        try:
+            import httpx
+            from datetime import datetime, timezone
+            user_id = body.get("user_id", "")
+            channel_id = body.get("channel_id", "")
+            team_num = body.get("text", "").strip().replace(" ", "").lstrip("0")
+            if not team_num or not team_num.isdigit():
+                app.client.chat_postEphemeral(channel=channel_id, user=user_id, text=":x: Usage: `/lookup 254`")
+                return
+            TBA_EVENT = os.environ.get("TBA_EVENT_KEY", "2026cancmp")
+            headers = {"X-TBA-Auth-Key": os.environ["TBA_API_KEY"]}
+            team_key = f"frc{team_num}"
+            r_team = httpx.get(f"https://www.thebluealliance.com/api/v3/team/{team_key}/simple", headers=headers, timeout=8.0)
+            r_status = httpx.get(f"https://www.thebluealliance.com/api/v3/team/{team_key}/event/{TBA_EVENT}/status", headers=headers, timeout=8.0)
+            team = r_team.json() if r_team.status_code == 200 else {}
+            status = r_status.json() if r_status.status_code == 200 else {}
+            team_name = team.get("nickname", f"Team {team_num}")
+            qual = status.get("qual") or {}
+            ranking = qual.get("ranking") or {}
+            record = ranking.get("record") or {}
+            rank = ranking.get("rank", "?")
+            num_teams = qual.get("num_teams", 60)
+            wins = record.get("wins", 0)
+            losses = record.get("losses", 0)
+            ties = record.get("ties", 0)
+            rp = ranking.get("sort_orders", [0])[0] if ranking.get("sort_orders") else 0
+            matches_played = ranking.get("matches_played", 0)
+            next_key = status.get("next_match_key")
+            last_key = status.get("last_match_key")
+            next_match_str = "None"
+            if next_key:
+                next_label = next_key.split("_", 1)[-1].upper()
+                r_next = httpx.get(f"https://www.thebluealliance.com/api/v3/match/{next_key}", headers=headers, timeout=8.0)
+                if r_next.status_code == 200:
+                    nm = r_next.json()
+                    pred_time = nm.get("predicted_time") or nm.get("time")
+                    if pred_time:
+                        dt = datetime.fromtimestamp(pred_time, tz=timezone.utc).astimezone()
+                        next_match_str = f"{next_label} (~{dt.strftime('%-I:%M %p')})"
+                    else:
+                        next_match_str = next_label
+                    red_teams = " | ".join(t.replace("frc","") for t in nm["alliances"]["red"]["team_keys"])
+                    blue_teams = " | ".join(t.replace("frc","") for t in nm["alliances"]["blue"]["team_keys"])
+                    team_red = team_key in nm["alliances"]["red"]["team_keys"]
+                    our_color = ":red_circle:" if team_red else ":large_blue_circle:"
+                    next_match_str += f"\n    {our_color} {'Red' if team_red else 'Blue'}: {red_teams if team_red else blue_teams}"
+            epa = _get_epa(int(team_num))
+            lines = [f":mag: *Team {team_num} — {team_name}*"]
+            if rank != "?":
+                rank_icon = ":trophy:" if rank <= 8 else (":green_circle:" if rank <= 16 else (":yellow_circle:" if rank <= 30 else ":red_circle:"))
+            else:
+                rank_icon = ":bar_chart:"
+            lines.append(f"{rank_icon} Rank *{rank}/{num_teams}* | *{wins}W-{losses}L-{ties}T* | RP: *{rp:.2f}* ({matches_played} played)")
+            if epa:
+                lines.append(f":zap: EPA: *{epa['total']:.1f}* total  |  Auto *{epa['auto']:.1f}*  Teleop *{epa['teleop']:.1f}*  End *{epa['end']:.1f}*")
+            lines.append(f":calendar: Next: *{next_match_str}*")
+            app.client.chat_postEphemeral(channel=channel_id, user=user_id, text="\n".join(lines))
+        except Exception as e:
+            logger.error("lookup error: %s", e)
+            try:
+                app.client.chat_postEphemeral(channel=body.get("channel_id",""), user=body.get("user_id",""), text=f":x: Error: {e}")
+            except:
+                pass
+    threading.Thread(target=work).start()
+
+
+# ──────────────────────────────────────────────
+# /help
+# ──────────────────────────────────────────────
+
+@app.command("/help")
+def cmd_help(ack, body, respond):
+    ack()
+    lines = [
+        ":robot_face: *Push Bot — Command Reference*",
+        "",
+        "*Match Info*",
+        "  `/next-match` — 7419\'s next unplayed match, teams, estimated time",
+        "  `/standings` — current rank, W/L/T record, and RP",
+        "  `/match-stats QM12` — full score breakdown for any match",
+        "  `/lookup 254` — team rank, record, RP, EPA breakdown, next match",
+        "",
+        "*Scouting*",
+        "  `/whos-scouting QM12` — who is match scouting a specific qual",
+        "  `/scouting-status QM12` — match scouts + Lovat confirmation status",
+        "  `/my-shift Name` — all match scouting shifts for a scout",
+        "  `/confirm QM12 Aarav` — mark a scout as confirmed for Lovat",
+        "",
+        "*Operations (lead only)*",
+        "  `/push QM12` — manually trigger on-deck alerts for a match",
+        "  `/post-match QM12` — manually post result to #district-championships",
+        "  `/refresh-schedule` — force reload the Google Sheet schedule",
+        "  `/nexus-status` — show what Nexus has queuing / on deck right now",
+        "",
+        "*Tips*",
+        "  \'QM12\' and \'QM 12\' both work — spaces are stripped automatically",
+        "  Names are case-insensitive and first-name only: \'aarav\' = \'Aarav A\'",
+        "  Post-match auto-posts after every 7419 match once TBA has full data",
+        "  Lovat reminder fires 7 min after results, escalates to lead after 4 more",
+    ]
+    respond("\n".join(lines), response_type="ephemeral")
 
 # ──────────────────────────────────────────────
 # Start Socket Mode
